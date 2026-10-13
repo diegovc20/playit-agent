@@ -1,0 +1,62 @@
+# Compila el agente oficial de playit.gg para Mac con chip Apple y lo publica en un release de este
+# fork. playit.gg dejó de publicar binarios para Mac después de la 0.15.13; Parabellum (un launcher de
+# Minecraft) lo necesita para hostear servidores en Mac.
+#
+# Se dispara con una etiqueta "v<versión de playit>-macos-arm64" puesta sobre la etiqueta oficial de
+# esa versión más este archivo (el código de playit no cambia). El workflow de playit
+# (build-release.yml) se quitó en esta rama porque necesita sus secretos.
+#
+# Builds the official playit.gg agent for Apple Silicon Macs from the upstream tag, unchanged.
+
+name: Agente para Mac (arm64)
+
+on:
+  push:
+    tags: ["v*-macos-arm64"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar
+        run: |
+          rustc --version
+          rustup target add aarch64-apple-darwin
+          cargo build --release --locked -p playit-cli --target aarch64-apple-darwin
+
+      - name: Comprobar
+        run: |
+          bin=target/aarch64-apple-darwin/release/playit-cli
+          file "$bin"
+          codesign -dv "$bin"
+          version="$("$bin" version)"
+          echo "versión: $version"
+          test "v${version}-macos-arm64" = "$GITHUB_REF_NAME"
+          cp "$bin" playit-darwin-arm64
+          shasum -a 256 playit-darwin-arm64 | tee playit-darwin-arm64.sha256
+          stat -f "%z bytes" playit-darwin-arm64
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream="${GITHUB_REF_NAME%-macos-arm64}"
+          cat > notas.md <<EOF
+          Agente de playit.gg ${upstream} para Mac con chip Apple (arm64, macOS 11 o más nuevo), compilado
+          por GitHub Actions a partir de la etiqueta oficial [${upstream}](https://github.com/playit-cloud/playit-agent/tree/${upstream})
+          sin cambios en el código: \`cargo build --release --locked -p playit-cli --target aarch64-apple-darwin\`
+          ($(rustc --version)). Ver el workflow \`.github/workflows/macos-arm64.yml\` y su ejecución.
+
+          Official playit.gg agent ${upstream} built for Apple Silicon Macs from the upstream tag, unchanged.
+
+          SHA-256: \`$(cut -d' ' -f1 playit-darwin-arm64.sha256)\`
+
+          Licencia: BSD-2-Clause, Copyright 2022 Developed Methods LLC (\`LICENSE.txt\`).
+          EOF
+          gh release create "$GITHUB_REF_NAME" playit-darwin-arm64 playit-darwin-arm64.sha256 LICENSE.txt \
+            --title "playit ${upstream} para Mac (arm64)" --notes-file notas.md
