@@ -6,6 +6,9 @@
 # esa versión más este archivo (el código de playit no cambia). El workflow de playit
 # (build-release.yml) se quitó en esta rama porque necesita sus secretos.
 #
+# La compilación corre código de terceros (los build.rs de las dependencias), así que lo hace un
+# trabajo de solo lectura y sin el token guardado; otro trabajo, que no compila nada, publica.
+#
 # Builds the official playit.gg agent for Apple Silicon Macs from the upstream tag, unchanged.
 
 name: Agente para Mac (arm64)
@@ -14,18 +17,21 @@ on:
   push:
     tags: ["v*-macos-arm64"]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build:
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Compilar
         run: |
-          rustc --version
+          rustc --version | tee rustc.txt
           rustup target add aarch64-apple-darwin
           cargo build --release --locked -p playit-cli --target aarch64-apple-darwin
 
@@ -37,9 +43,27 @@ jobs:
           version="$("$bin" version)"
           echo "versión: $version"
           test "v${version}-macos-arm64" = "$GITHUB_REF_NAME"
-          cp "$bin" playit-darwin-arm64
-          shasum -a 256 playit-darwin-arm64 | tee playit-darwin-arm64.sha256
-          stat -f "%z bytes" playit-darwin-arm64
+          mkdir salida
+          cp "$bin" salida/playit-darwin-arm64
+          cp LICENSE.txt rustc.txt salida/
+          (cd salida && shasum -a 256 playit-darwin-arm64 | tee playit-darwin-arm64.sha256)
+          stat -f "%z bytes" salida/playit-darwin-arm64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agente
+          path: salida/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agente
 
       - name: Publicar
         env:
@@ -50,7 +74,7 @@ jobs:
           Agente de playit.gg ${upstream} para Mac con chip Apple (arm64, macOS 11 o más nuevo), compilado
           por GitHub Actions a partir de la etiqueta oficial [${upstream}](https://github.com/playit-cloud/playit-agent/tree/${upstream})
           sin cambios en el código: \`cargo build --release --locked -p playit-cli --target aarch64-apple-darwin\`
-          ($(rustc --version)). Ver el workflow \`.github/workflows/macos-arm64.yml\` y su ejecución.
+          ($(cat rustc.txt)). Ver el workflow \`.github/workflows/macos-arm64.yml\` y su ejecución.
 
           Official playit.gg agent ${upstream} built for Apple Silicon Macs from the upstream tag, unchanged.
 
@@ -58,5 +82,5 @@ jobs:
 
           Licencia: BSD-2-Clause, Copyright 2022 Developed Methods LLC (\`LICENSE.txt\`).
           EOF
-          gh release create "$GITHUB_REF_NAME" playit-darwin-arm64 playit-darwin-arm64.sha256 LICENSE.txt \
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" playit-darwin-arm64 playit-darwin-arm64.sha256 LICENSE.txt \
             --title "playit ${upstream} para Mac (arm64)" --notes-file notas.md
